@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      # Dev-only credentials, matching .env.example. Not for prod use.
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: CHANGE_ME
+      POSTGRES_DB: assistant
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

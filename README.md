@@ -28,6 +28,7 @@ before models; cheap/local before expensive/hosted; cached grounded state before
 | Understand the whole design | [`docs/plans/`](docs/plans/) — the versioned architecture plan (v1 → v2, evolving) |
 | Read a subsystem contract | [`docs/specs/`](docs/specs/) — one spec per subsystem |
 | Pick up build work | GitHub **Epics** and their child **Issues** (labels + `v1: Shadow-Mode Email Spine` milestone + Project board) |
+| Set up a dev environment | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — `make dev`/`make up`/`make test`, where the Gmail OAuth token goes |
 
 ## v1 walking skeleton
 
@@ -57,4 +58,5 @@ tests/          unit, integration, evals, adversarial
 
 ## Status
 
-Planning complete; build not started. Handoff target for the build is Sonnet.
+Planning complete; build in progress (Epic E1: Ingestion & Event Backbone). Handoff target
+for the build is Sonnet.
