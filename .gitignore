@@ -1,0 +1,67 @@
+# ─── Secrets & credentials (PUBLIC REPO — never commit any of these) ───
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.access_token
+*token*
+*secret*
+*credential*
+client_secret*.json
+service-account*.json
+oauth*.json
+token.json
+credentials.json
+*.gnupg
+*.age
+*.sops.yaml
+secrets/
+.secrets/
+
+# ─── Real personal / mail data (never commit) ───
+data/
+*.mbox
+*.eml
+raw_payloads/
+fixtures/real/
+*.dump
+*.sql.gz
+pgdump*/
+*.sqlite
+*.db
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── Node (n8n custom nodes / tooling) ───
+node_modules/
+npm-debug.log*
+
+# ─── Models / large artifacts ───
+models/
+*.gguf
+*.bin
+*.safetensors
+
+# ─── OS / editor ───
+.DS_Store
+.idea/
+.vscode/
+*.swp
