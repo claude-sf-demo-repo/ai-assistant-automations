@@ -1,12 +1,16 @@
+import logging
 import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
 
+from pydantic import ValidationError
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+
+logger = logging.getLogger("alembic.env")
 
 # Make the repo root importable so `shared.config.settings` can be loaded regardless of
 # the working directory this is invoked from.
@@ -33,12 +37,17 @@ target_metadata = None
 # DATABASE_URL always comes from the environment / .env via pydantic-settings `Settings`
 # (shared/config/settings.py) — never hardcoded in alembic.ini. Fall back to a bare env
 # read so `alembic` can run even without the other Settings fields (gmail_oauth_token_path)
-# populated, e.g. in CI contexts that only run migrations.
+# populated, e.g. in CI contexts that only run migrations. Only a `Settings` *validation*
+# failure (a genuinely missing/invalid field) triggers the fallback — anything else (e.g. a
+# real bug inside `shared.config.settings`) is left to raise and fail loudly.
 try:
     from shared.config.settings import Settings
 
     database_url = Settings(gmail_oauth_token_path=os.environ.get("GMAIL_OAUTH_TOKEN_PATH", "")).database_url
-except Exception:
+except ValidationError as exc:
+    logger.warning(
+        "Settings validation failed (%s); falling back to DATABASE_URL env var directly.", exc
+    )
     database_url = os.environ["DATABASE_URL"]
 
 config.set_main_option("sqlalchemy.url", database_url)

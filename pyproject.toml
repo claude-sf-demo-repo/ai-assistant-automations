@@ -8,6 +8,10 @@ dependencies = [
     "pydantic>=2,<3",
     "pydantic-settings>=2,<3",
     "alembic>=1.13,<2",
+    # Not used as an ORM/schema layer (migrations are raw SQL via psycopg, per spec 01) —
+    # Alembic's own env.py uses SQLAlchemy's engine/connection machinery to run against
+    # Postgres. Declared explicitly rather than relying on Alembic's transitive dependency.
+    "sqlalchemy>=2,<3",
     "psycopg[binary]>=3.1,<4",
 ]
 
