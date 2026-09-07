@@ -46,7 +46,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _FALLBACK_BIN_DIR = Path("/opt/homebrew/opt/postgresql@16/bin")
 
 # Every table Task 4+ migrations create. TRUNCATEd between tests by `pg_dsn`.
-_E1_TABLES = ["ingest_queue", "gmail_cursor", "ingest_dlq"]
+_E1_TABLES = ["ingest_queue", "gmail_cursor", "ingest_dlq", "thread_fold_projection"]
 
 
 def _find_binary(name: str) -> str | None:

@@ -39,6 +39,23 @@ This task provides the protocols plus:
 Fakes for `ModelClient`, `ToolClient`, and `Store` land alongside their real implementations
 in later tasks/epics.
 
+## Process inventory
+
+Per spec 01 ("Processes"), exactly three long-running processes exist in v1, plus an
+optional transport:
+
+| Process | Count | Role | Entry point |
+|---|---|---|---|
+| `poller` | 1 | Polls Gmail `history.list`, validates envelopes, enqueues them. Holds the OAuth token. **Never writes state.** | `adapters/gmail/adapter.py::poll_once` |
+| `ingest-worker` | 1 | The **only** consumer/DB writer: claims from `ingest_queue` (`FOR UPDATE SKIP LOCKED`), holds a per-`thread_ref` advisory lock (`pg_advisory_xact_lock`) for the duration of each item, folds event-time state, acks/retries/DLQs. | `core/ingestion/worker.py::run_forever` |
+| `digest-scheduler` | 1 | Reads state, emits the daily Telegram digest. **Not implemented in E1** — stub only, lands with spec 06. | — |
+| n8n | optional | Transport only: moves opaque notifications, holds no tokens and no mail. | — |
+
+Enqueue-only producers (the poller, and n8n if wired) never call anything in
+`core/ingestion/worker.py` or open a write transaction against `ingest_queue`/
+`ingest_dlq`/`thread_fold_projection` directly — the single `ingest-worker` process is
+the only writer, matching spec 01 invariant 1 ("Exactly one process writes to state").
+
 ## Forward-only migrations
 
 Every Alembic migration's `downgrade()` raises `NotImplementedError()` (see
