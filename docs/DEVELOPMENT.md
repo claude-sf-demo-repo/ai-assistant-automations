@@ -46,8 +46,8 @@ optional transport:
 
 | Process | Count | Role | Entry point |
 |---|---|---|---|
-| `poller` | 1 | Polls Gmail `history.list`, validates envelopes, enqueues them. Holds the OAuth token. **Never writes state.** | `adapters/gmail/adapter.py::poll_once` |
-| `ingest-worker` | 1 | The **only** consumer/DB writer: claims from `ingest_queue` (`FOR UPDATE SKIP LOCKED`), holds a per-`thread_ref` advisory lock (`pg_advisory_xact_lock`) for the duration of each item, folds event-time state, acks/retries/DLQs. | `core/ingestion/worker.py::run_forever` |
+| `poller` | 1 | Polls Gmail `history.list`, validates envelopes, enqueues them. Holds the OAuth token. **Never writes state.** | `python -m scripts.run_poller` (thin wiring; logic is `adapters/gmail/adapter.py::poll_once`) |
+| `ingest-worker` | 1 | The **only** consumer/DB writer: claims from `ingest_queue` (`FOR UPDATE SKIP LOCKED`), holds a per-`thread_ref` advisory lock (`pg_advisory_xact_lock`) for the duration of each item, folds event-time state, acks/retries/DLQs. | `python -m scripts.run_worker` (thin wiring; logic is `core/ingestion/worker.py::run_forever`) |
 | `digest-scheduler` | 1 | Reads state, emits the daily Telegram digest. **Not implemented in E1** — stub only, lands with spec 06. | — |
 | n8n | optional | Transport only: moves opaque notifications, holds no tokens and no mail. | — |
 
