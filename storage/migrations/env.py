@@ -50,6 +50,16 @@ except ValidationError as exc:
     )
     database_url = os.environ["DATABASE_URL"]
 
+# `Settings.database_url` / `.env.example` document a plain `postgresql://` DSN (the
+# scheme psycopg itself, and every other module in this repo, expects). SQLAlchemy's
+# `postgresql://` default dialect is psycopg2, though -- which isn't a dependency here
+# (only `psycopg[binary]` v3 is, per pyproject.toml's comment on why: "migrations are
+# raw SQL via psycopg"). Normalize the scheme to `postgresql+psycopg://` so Alembic's
+# `engine_from_config` picks the psycopg3 dialect, without requiring every consumer of
+# `DATABASE_URL` to know about this SQLAlchemy-only quirk.
+if database_url.startswith("postgresql://"):
+    database_url = "postgresql+psycopg://" + database_url[len("postgresql://") :]
+
 config.set_main_option("sqlalchemy.url", database_url)
 
 # other values from the config, defined by the needs of env.py,

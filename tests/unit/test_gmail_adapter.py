@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import re
 from pathlib import Path
 
@@ -310,7 +311,13 @@ class TestEnvelopeConstructionFailureSurfacesTypedError:
     def test_malformed_history_record_raises_envelope_validation_error(self, tmp_path) -> None:
         clock = FakeClock()
         payload_store = _payload_store(tmp_path)
+        # Deep-copied: `_extract_records` returns records that share nested dicts with
+        # the module-level fixture constant (it doesn't deep-copy), so mutating
+        # `record["message"]` in place here would otherwise permanently corrupt
+        # `HISTORY_LIST_RESPONSE_CLEAN_INBOUND` for every other test in the session
+        # that imports the same fixture object afterward.
         [record] = _extract_records(HISTORY_LIST_RESPONSE_CLEAN_INBOUND)
+        record = copy.deepcopy(record)
         record["message"]["threadId"] = ""  # violates min_length=1 on thread_ref
 
         with pytest.raises(EnvelopeValidationError):
