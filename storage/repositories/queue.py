@@ -88,7 +88,6 @@ class PostgresIngestTransaction:
 
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
-        self._inserted_any = False
 
     def enqueue_many(self, envelopes: list[CommonEventEnvelope]) -> None:
         """Bulk insert; redelivery of an already-enqueued `idempotency_key` is a no-op.
@@ -99,6 +98,10 @@ class PostgresIngestTransaction:
         """
         if not envelopes:
             return
+        # Local to this call: tracks whether THIS `enqueue_many` call inserted any new
+        # rows, so a later call on the same (long-lived) transaction that inserts
+        # nothing new doesn't fire a stale NOTIFY based on an earlier call's result.
+        inserted_any = False
         with self._conn.cursor() as cur:
             for envelope in envelopes:
                 cur.execute(
@@ -115,8 +118,8 @@ class PostgresIngestTransaction:
                     ),
                 )
                 if cur.rowcount:
-                    self._inserted_any = True
-        if self._inserted_any:
+                    inserted_any = True
+        if inserted_any:
             # NOTIFY payload is deliberately empty: it's a wake-up hint, not a message
             # bus (see the migration docstring on why the worker must also poll).
             with self._conn.cursor() as cur:
