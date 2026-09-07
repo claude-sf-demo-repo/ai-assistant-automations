@@ -13,11 +13,11 @@ all inside the one transaction the caller's `conn` belongs to, so claim / lock /
 ack either all become visible together or none do (spec 01 invariant 4: "All work for a
 given `thread_ref` is serialized").
 
-Failure handling here is a deliberate first-pass stub: `_handle_failure` inlines a fixed
-backoff and Task 5's own `poison_threshold` check. Task 6 owns the real retry/backoff
-policy (exponential backoff, alerting) and is expected to extract this into its own
-`retry.py`, replacing `_handle_failure` -- this task's brief explicitly allows exactly
-that ("Task 6 will refactor/extract retry.py").
+Failure handling delegates to `core/ingestion/retry.py::handle_failure` (issue #16):
+deterministic exponential backoff below `poison_threshold`, DLQ at/above it. Task 5 left
+an inline stub here with the same behavior at a fixed backoff; Task 6 extracted the real
+policy into `retry.py` so it's unit-testable with no database (this module only wires it
+in).
 
 `run_forever` is the loop wrapper: it drains `process_one` until the queue is empty, then
 waits for either a Postgres `NOTIFY` wake hint on `NOTIFY_CHANNEL` or `poll_interval_
@@ -38,16 +38,16 @@ from typing import Callable
 import psycopg
 
 from core.ingestion.fold import fold_thread_state
+from core.ingestion.retry import handle_failure
 from shared.events.clock import SystemClock
 from shared.events.envelope import CommonEventEnvelope
 from shared.events.seams import Clock
-from storage.repositories.queue import NOTIFY_CHANNEL, QueueRepository, QueueRow
+from storage.repositories.queue import NOTIFY_CHANNEL, QueueRepository
 from storage.repositories.thread_fold import ThreadFoldRepository
 
 __all__ = ["process_one", "run_forever"]
 
 DEFAULT_POISON_THRESHOLD = 5
-DEFAULT_RETRY_BACKOFF_SECONDS = 30.0
 
 
 def _accumulate_if_new(
@@ -70,25 +70,6 @@ def _accumulate_if_new(
     if any(e["idempotency_key"] == envelope_payload["idempotency_key"] for e in source_events):
         return list(source_events)
     return [*source_events, envelope_payload]
-
-
-def _handle_failure(
-    queue_repo: QueueRepository,
-    row: QueueRow,
-    exc: Exception,
-    poison_threshold: int,
-) -> None:
-    """First-pass failure handling (Task 5 stub; Task 6 owns the real policy).
-
-    `row.attempts` is the count *before* this failed attempt; `+ 1` accounts for the
-    attempt that just raised `exc`. Once that reaches `poison_threshold`, the row moves
-    to `ingest_dlq` (spec 01 invariant 6: "A poison message lands in the DLQ and never
-    blocks the queue head") instead of being retried again.
-    """
-    if row.attempts + 1 >= poison_threshold:
-        queue_repo.move_to_dlq(row.id, f"{type(exc).__name__}: {exc}")
-    else:
-        queue_repo.mark_retry(row.id, DEFAULT_RETRY_BACKOFF_SECONDS)
 
 
 def process_one(
@@ -139,7 +120,7 @@ def process_one(
         )
         queue_repo.mark_done(row.id)
     except Exception as exc:  # noqa: BLE001 - deliberately broad: any handler failure retries/DLQs
-        _handle_failure(queue_repo, row, exc, poison_threshold)
+        handle_failure(queue_repo, row, exc, poison_threshold, clock)
 
     conn.commit()
     return True

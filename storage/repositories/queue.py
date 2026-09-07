@@ -18,6 +18,7 @@ No other module opens a connection to write to `ingest_queue` or `ingest_dlq`.
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -60,6 +61,18 @@ def _require_gmail(source_system: str) -> None:
             f"gmail_cursor has no source_system column; only {_SUPPORTED_SOURCE_SYSTEM!r} "
             f"is supported in E1, got {source_system!r}"
         )
+
+
+@dataclass(frozen=True)
+class DlqRow:
+    """One `ingest_dlq` row, as returned by `QueueRepository.get_dlq_row`."""
+
+    id: int
+    idempotency_key: str
+    envelope: dict[str, Any]
+    error: str
+    attempts: int
+    died_at: datetime
 
 
 @dataclass(frozen=True)
@@ -247,6 +260,43 @@ class QueueRepository:
                 (error, queue_id),
             )
             cur.execute("DELETE FROM ingest_queue WHERE id = %s", (queue_id,))
+
+    def get_dlq_row(self, dlq_id: int) -> DlqRow | None:
+        """Read one `ingest_dlq` row by id, or `None` if it no longer exists (issue #16,
+        replay path in `core/ingestion/replay.py`).
+        """
+        with self._conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM ingest_dlq WHERE id = %s", (dlq_id,))
+            row = cur.fetchone()
+            return DlqRow(**row) if row is not None else None
+
+    def enqueue_from_dlq(self, dlq_row: DlqRow) -> None:
+        """Re-insert a DLQ row's envelope into `ingest_queue` as a fresh, `ready`,
+        zero-`attempts` row (issue #16 replay).
+
+        Uses the same `ON CONFLICT (idempotency_key) DO NOTHING` pattern as
+        `PostgresIngestTransaction.enqueue_many` (Task 4) so replaying a DLQ row whose
+        `idempotency_key` is somehow already present in `ingest_queue` (any status) is a
+        silent no-op rather than a unique-constraint error or a duplicate row --
+        replay's idempotency guarantee.
+        """
+        account_ref = dlq_row.envelope.get("account_ref")
+        thread_ref = dlq_row.envelope.get("thread_ref")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ingest_queue
+                    (idempotency_key, account_ref, thread_ref, envelope, status, attempts)
+                VALUES (%s, %s, %s, %s::jsonb, 'ready', 0)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                """,
+                (dlq_row.idempotency_key, account_ref, thread_ref, json.dumps(dlq_row.envelope)),
+            )
+
+    def delete_dlq_row(self, dlq_id: int) -> None:
+        """Remove a DLQ row once it has been replayed back onto `ingest_queue`."""
+        with self._conn.cursor() as cur:
+            cur.execute("DELETE FROM ingest_dlq WHERE id = %s", (dlq_id,))
 
 
 def claim_one(conn: psycopg.Connection) -> QueueRow | None:
