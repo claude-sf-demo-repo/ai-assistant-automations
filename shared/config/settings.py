@@ -22,3 +22,6 @@ class Settings(BaseSettings):
     poll_interval_seconds: int = 60
     poison_threshold: int = 5
     log_level: str = "INFO"
+    # Local-filesystem content-addressed payload store (shared/events/payload_store.py).
+    # Object storage is a documented fast-follow (spec 00 open items), not E1 scope.
+    payload_store_dir: str = "var/payloads"
