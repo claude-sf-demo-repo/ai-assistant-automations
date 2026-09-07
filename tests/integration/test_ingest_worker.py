@@ -91,6 +91,65 @@ class TestEndToEndFoldViaWorkerLoop:
         assert len(row.source_events) == len(events)
 
 
+class TestFoldAccumulationIsIdempotentAgainstRedelivery:
+    """Code-review fix round (issue #17): a redelivered `ingest_queue` row for an
+    envelope already incorporated into `thread_fold_projection` must not double-count
+    that envelope in the fold. Regression test for `core/ingestion/worker.py::
+    _accumulate_if_new`.
+
+    A queue row moving back to `status = 'ready'` after having already been
+    `mark_done`'d is exactly what a future replay bug (or Task 6 replay path, if it ever
+    replayed an already-succeeded row) would produce -- so this test drives that
+    scenario directly against the real table rather than only unit-testing the helper.
+    """
+
+    def test_reprocessing_the_same_envelope_does_not_double_count_it(self, pg_dsn: str) -> None:
+        thread_ref = "thread-redelivery-1"
+        events = _thread_events(thread_ref, "redeliver", n=3)
+        _enqueue(pg_dsn, events)
+
+        run_forever(
+            pg_dsn,
+            poll_interval_seconds=0.05,
+            sleep_fn=lambda _seconds: None,
+            max_iterations=1,
+        )
+
+        expected_state = fold_thread_state(events)
+        with psycopg.connect(pg_dsn) as conn:
+            row_after_first_drain = ThreadFoldRepository(conn).get(_ACCOUNT_REF, thread_ref)
+        assert row_after_first_drain is not None
+        assert row_after_first_drain.state == expected_state
+        assert len(row_after_first_drain.source_events) == 3
+
+        # Simulate redelivery: move one already-`done` row back to `ready` so
+        # `claim_one` picks it up again, without touching its envelope content.
+        with psycopg.connect(pg_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ingest_queue SET status = 'ready' "
+                    "WHERE idempotency_key = %s",
+                    (events[0].idempotency_key,),
+                )
+            conn.commit()
+
+        run_forever(
+            pg_dsn,
+            poll_interval_seconds=0.05,
+            sleep_fn=lambda _seconds: None,
+            max_iterations=1,
+        )
+
+        with psycopg.connect(pg_dsn) as conn:
+            row_after_redelivery = ThreadFoldRepository(conn).get(_ACCOUNT_REF, thread_ref)
+
+        assert row_after_redelivery is not None
+        # Still exactly 3 source events and the same folded state -- the redelivered
+        # envelope was recognized as already-present and not appended a second time.
+        assert len(row_after_redelivery.source_events) == 3
+        assert row_after_redelivery.state == expected_state
+
+
 class TestConcurrency:
     """Two threads' worth of events interleaved in the queue; 2+ concurrent worker
     iterations against the same Postgres -> each thread's own events still fold

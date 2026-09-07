@@ -50,6 +50,28 @@ DEFAULT_POISON_THRESHOLD = 5
 DEFAULT_RETRY_BACKOFF_SECONDS = 30.0
 
 
+def _accumulate_if_new(
+    source_events: list[dict], envelope_payload: dict
+) -> list[dict]:
+    """Append `envelope_payload` to `source_events` unless an envelope with the same
+    `idempotency_key` is already present (issue #17).
+
+    This is what makes fold accumulation idempotent against redelivery: if a queue row
+    is ever reprocessed against a thread whose fold already incorporated that exact
+    envelope -- e.g. a future replay path (Task 6), or any code inserted between
+    `fold_repo.upsert()` and `queue_repo.mark_done()` that causes a reprocess -- the
+    envelope is not appended a second time, so `fold_thread_state` never double-counts
+    it. Matching is by `idempotency_key`, the same uniqueness key `ingest_queue` itself
+    enforces (spec 00: "`idempotency_key` uniquely identifies an event; re-delivery is a
+    no-op"), not by list position or object identity.
+
+    Returns a new list; never mutates `source_events` in place.
+    """
+    if any(e["idempotency_key"] == envelope_payload["idempotency_key"] for e in source_events):
+        return list(source_events)
+    return [*source_events, envelope_payload]
+
+
 def _handle_failure(
     queue_repo: QueueRepository,
     row: QueueRow,
@@ -101,8 +123,9 @@ def process_one(
             cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (envelope.thread_ref,))
 
         existing = fold_repo.get(envelope.account_ref, envelope.thread_ref)
-        source_events = list(existing.source_events) if existing else []
-        source_events.append(row.envelope)
+        source_events = _accumulate_if_new(
+            list(existing.source_events) if existing else [], row.envelope
+        )
 
         envelopes = [CommonEventEnvelope.model_validate(e) for e in source_events]
         new_state = fold_thread_state(envelopes)
