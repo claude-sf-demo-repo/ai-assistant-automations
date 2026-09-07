@@ -5,12 +5,17 @@ Loads credentials from `settings.gmail_oauth_token_path` -- a file path read fro
 `gmail.readonly` scope (spec 01: "The poller holds the OAuth token ... (scope
 `gmail.readonly`)").
 
-`GmailToolClient` is NOT exercised by this repo's test suite: it needs live Google
+`GmailToolClient` itself is NOT exercised by this repo's test suite: it needs live Google
 credentials and network access. Tests use `tests/unit/fakes.py::FakeGmailToolClient`
 instead, which implements the same `ToolClient` protocol
 (`shared/events/seams.py::ToolClient`) against scripted fixtures. Keep this module's
 public surface (the `call("history.list", ...)` contract) in lockstep with what
 `adapters/gmail/adapter.py` expects from either implementation.
+
+`_merge_full_and_raw`, the pure per-message combination step `_history_list` relies on
+(see its docstring for why two API calls are needed), IS network-free and IS exercised
+directly in `tests/unit/test_gmail_auth.py` against realistic `format="full"` /
+`format="raw"` fixtures (`tests/unit/fixtures/gmail_message_resources.py`).
 
 The Google client libraries (`google-auth`, `google-api-python-client`) are an optional
 dependency group (`pip install .[gmail]`) -- imported lazily inside `__init__` so that
@@ -25,12 +30,33 @@ from typing import Any
 _GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 
 
+def _merge_full_and_raw(
+    full_message: dict[str, Any], raw_message: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge a `format="full"` message resource with a `format="raw"` one into the
+    single hydrated shape `adapters/gmail/adapter.py::to_envelope` expects.
+
+    The real Gmail API never returns both `payload` (headers/body, needed for
+    `Authentication-Results`/`From`/`Subject`/...) and `raw` (the base64url RFC 822
+    bytes, needed for the payload store) on the same message resource:
+    `format="full"` gives the former and omits `raw` entirely; `format="raw"` gives
+    only the latter and omits `payload` entirely. Two API calls per changed message are
+    therefore required -- this function is the pure (network-free, fully testable)
+    combination step; `_history_list` below is the thin, untested (needs live
+    credentials) I/O wrapper around it.
+    """
+    merged = dict(full_message)
+    merged["raw"] = raw_message["raw"]
+    return merged
+
+
 class GmailToolClient:
     """Production `ToolClient` for Gmail: real OAuth credentials, real API calls.
 
-    Only `history.list` is implemented (fanning out internally to
-    `users.messages.get(format="raw")` for each changed message, so callers always get
-    fully-hydrated message resources -- see the "Note on message hydration" in
+    Only `history.list` is implemented (fanning out internally to two
+    `users.messages.get` calls per changed message -- `format="full"` for headers,
+    `format="raw"` for the raw bytes -- merged via `_merge_full_and_raw`, so callers
+    always get fully-hydrated message resources; see the "Note on message hydration" in
     adapters/gmail/adapter.py). Any other `tool` name raises `NotImplementedError`.
     """
 
@@ -67,12 +93,19 @@ class GmailToolClient:
             for bucket in ("messagesAdded", "messagesChanged"):
                 for item in entry.get(bucket, []):
                     message_id = item["message"]["id"]
-                    item["message"] = (
+                    full_message = (
+                        self._service.users()
+                        .messages()
+                        .get(userId=self._user_id, id=message_id, format="full")
+                        .execute()
+                    )
+                    raw_message = (
                         self._service.users()
                         .messages()
                         .get(userId=self._user_id, id=message_id, format="raw")
                         .execute()
                     )
+                    item["message"] = _merge_full_and_raw(full_message, raw_message)
         return response
 
 

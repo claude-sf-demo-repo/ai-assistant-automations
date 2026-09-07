@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -227,22 +228,66 @@ class TestCrashBetweenEnqueueAndCursorAdvance:
         assert ingest_store.queue == []
 
 
+def _module_imports_adapters_gmail(source: str) -> bool:
+    """AST-based check: does `source` contain an `import`/`from ... import` statement
+    that pulls in `adapters.gmail` (or a submodule of it)?
+
+    AST-based rather than a text/regex scan so that (a) prose mentions in docstrings/
+    comments never false-positive, and (b) it isn't fooled by a bare `import adapters`
+    followed by `adapters.gmail.foo(...)` attribute access -- that form still shows up
+    as an `Import` node for `adapters` alone, which callers can additionally flag if
+    they want to be stricter; as written, `core/` doesn't do a bare `import adapters`
+    anywhere today (checked below), so this is airtight for the actual codebase.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "adapters.gmail" or alias.name.startswith("adapters.gmail."):
+                    return True
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == "adapters.gmail" or module.startswith("adapters.gmail."):
+                return True
+    return False
+
+
+def _module_imports_bare_adapters(source: str) -> bool:
+    """Does `source` do a bare `import adapters` (which could then attribute-access
+    `.gmail` without tripping `_module_imports_adapters_gmail`)?
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "adapters":
+                    return True
+    return False
+
+
 class TestCoreImportsNothingGmailSpecific:
     """Prose (docstrings/comments) may mention `adapters/gmail` for cross-referencing --
-    what must never happen is an actual `import`/`from ... import` statement pulling
-    Gmail-specific code into `core/`.
+    what must never happen is an actual import pulling Gmail-specific code into `core/`.
     """
-
-    _IMPORT_LINE_RE = re.compile(
-        r"^\s*(?:import\s+adapters\.gmail|from\s+adapters\.gmail\b)", re.MULTILINE
-    )
 
     def test_no_core_module_imports_adapters_gmail(self) -> None:
         core_dir = Path("core")
         offenders = []
         for path in core_dir.rglob("*.py"):
             text = path.read_text()
-            if self._IMPORT_LINE_RE.search(text):
+            if _module_imports_adapters_gmail(text):
+                offenders.append(str(path))
+        assert offenders == []
+
+    def test_no_core_module_does_a_bare_import_adapters_either(self) -> None:
+        # Closes the gap a plain `import adapters.gmail` check can't: a bare
+        # `import adapters` followed by `adapters.gmail.foo(...)` attribute access
+        # wouldn't show up as an `adapters.gmail` import node at all.
+        core_dir = Path("core")
+        offenders = []
+        for path in core_dir.rglob("*.py"):
+            text = path.read_text()
+            if _module_imports_bare_adapters(text):
                 offenders.append(str(path))
         assert offenders == []
 

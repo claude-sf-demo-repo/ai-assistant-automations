@@ -30,12 +30,16 @@ Gmail record) and `payload_store` (where the raw message bytes get written) -- r
 reading a wall clock or a global store directly. Both are seams per shared/events/seams.py's
 "no I/O outside a seam" rule.
 
-Note on message hydration: real `history.list` calls don't inline full message bodies.
-`GmailToolClient` (adapters/gmail/auth.py) is responsible for returning fully-hydrated
-message resources (headers + `raw`) from its `history.list` tool call -- whatever fan-out
-to `users.messages.get` that requires is that client's concern, not this module's. Tests
-here script the post-fan-out shape directly (see
-`tests/unit/fixtures/gmail_history_responses.py`).
+Note on message hydration: real `history.list` calls don't inline full message bodies, and
+no single `users.messages.get` call returns both `payload.headers` and `raw` (Gmail's API
+gives headers only with `format="full"`/`"metadata"`, and raw bytes only with
+`format="raw"` -- never both on one resource). `GmailToolClient` (adapters/gmail/auth.py)
+is responsible for fanning out to both formats per changed message and merging them
+(`_merge_full_and_raw`) before returning from its `history.list` tool call, so this module
+always receives a single dict with both `payload.headers` and `raw` present. Tests here
+script that already-merged, post-fan-out shape directly (see
+`tests/unit/fixtures/gmail_history_responses.py`); the merge step itself is tested
+separately against realistic per-format fixtures in `tests/unit/test_gmail_auth.py`.
 """
 
 from __future__ import annotations
@@ -186,7 +190,13 @@ def to_envelope(
 
 
 def _extract_history_records(response: dict[str, Any]) -> list[dict[str, Any]]:
-    """Flatten a raw `history.list` response into per-message `to_envelope` inputs."""
+    """Flatten a raw `history.list` response into per-message `to_envelope` inputs.
+
+    Only `messagesAdded` and `messagesChanged` entries are mapped. `messagesDeleted`,
+    `labelsAdded`, and `labelsRemoved` history entries are intentionally dropped -- out
+    of scope for E1 (spec 01's poller loop is about new/changed messages, not
+    deletions or label-only mutations); a later epic can add handling for them.
+    """
     records: list[dict[str, Any]] = []
     for entry in response.get("history", []):
         history_id = entry["id"]
